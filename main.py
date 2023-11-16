@@ -1,114 +1,949 @@
-from tkinter import *
 import os
-#import ctypes   #<-----------lib that enable high DPI, to result smoother graphics
-import pathlib
-import customtkinter as ctk
-from customtkinter import *
+import tkinter as tk
+from datetime import datetime
+
+from functools import partial
+from sys import platform
+import shutil
+import threading
+
+from PIL import Image, ImageTk
+
+import ttkbootstrap as ttk
+from ttkbootstrap.tooltip import ToolTip
+from ttkbootstrap.dialogs.dialogs import Messagebox
+from ttkbootstrap.dialogs.dialogs import Querybox
+import psutil
+
+import ext
 
 
-#ctypes.windll.shcore.SetProcessDpiAwarness(True)            #increase dots per inch for sharper look
+#global variables
 
-#root cfg
-root = Tk()
-root.title="Pseudo Commander"
-root.grid_columnconfigure(1, weight=1)
-root.grid_rowconfigure(1, weight=1)
+fileNames = []
+file_path = "" #path to main.py
+lastDirectory = ""
+selectedItem = "" #focused item on treeview
+src = "" #temporary path for copying
+theme = ""
+photo_ref = [] #references of photos
+currentDrive = ""
+available_drivers = []
+font_size = "10" #default font size
+folderIcon = 0
+fileIcon = 0
+items = 0 # holds treeview items
+cwdLabel = 0
+footer = 0
 
+#available theme
 
-def pathChange(*event):
-    
-    directory = os.listdir(currentPath.get())   #Get all files in the current dir
-    list.delete(0, END)                         #clear the list... then insert
+#Dark
+Superhero = "superhero"
+Darkly = "darkly"
+Cyborg = "cyborg"
+Vapor = "vapor"
 
-    for file in directory:
-        list.insert(0, file)
+#Light
+Litera = "litera"
+Minty = "minty"
+Morph = "morph"
+Yeti = "yeti"
 
+def checkPlatform():
+    global currentDrive, available_drivers
+    if platform == "win32":
+        available_drivers = [
+            
+            chr(x) + ":" for x in range(65, 91) if os.path.exists(chr(x) + ":")
+            # 65-91 -> search for A-Z
+        ]
+        currentDrive = available_drivers[0] #current selected drive
+    elif platform == "linux":
+        available_drivers = "/"
+        currentDrive = available_drivers
 
-def changePathByClicking(event=None):
-
-    picked = list.get(list.curselection()[0])       #Get clicked item
-
-    path = os.path.join(currentPath.get(), picked)  #get full path
-
-    if os.path.isfile(path):                        #if file -> open
         
-        print("Opening: " + path)
-        os.startfile(path)
+def createWindow():
+    root = ttk.Window(themename=theme)
+    root.title("My Pseudo Explorer")
+    root.geometry("1280x720")
+    root.resizable(True, True)
+    root.iconphoto(False, tk.PhotoImage(file=file_path + "icon.png"))
+    return root
+
+
+def refresh(queryNames):
+    global fileNames, folderIcon, items, cwdLabel, footer
     
-    else:                                           #if dir -> proceed further and change new path
+    #refresh header
+    cwdLabel.config(text=" " + os.getcwd())
+    
+    #--refresh header
+    
+    # refresh browse
+    fileSizesSum = 0
+    if queryNames: 
+        fileNames = queryNames
+    else:
+        fileNames = os.listdir(os.getcwd())
+    fileTypes = [None] * len(fileNames)
+    fileSizes = [None] * len(fileNames)
+    fileDateModified = []
+    for i in items.get_children(): #delete data from previous dir
+        items.delete(i)
+    for i in range(len(fileNames)):
+        try:
+            #mod time of file
+            fileDateModified.append(
+                datetime.fromtimestamp(os.path.getmtime(fileNames[i])).strftime(
+                    "%d-%m-%Y %I:%M"
+                )
+            )
+            #size of file
+            fileSizes[i] = str(
+                round(os.stat(fileNames[i]).st_size / 1024)                               
+            ) 
+            # str ->round ->size of file in KB
+            fileSizesSum += int(fileSizes[i])
+            fileSizes[i] = str(round(os.stat(fileNames[i]).st_size / 1024)) + " KB"
+            #check file type
+            ext.extensions(fileTypes, fileNames, i)
+            
+            #insert
+            if fileTypes[i] == "Directory":
+                items.insert(
+                    parent = "",
+                    index = i,
+                    values = (fileNames[i], fileDateModified[i], fileTypes[i], ""),
+                    image = folderIcon,
+                )
+            else:
+                items.insert(
+                    parent = "",
+                    index = i,
+                    values = (
+                        fileNames[i],
+                        fileDateModified[i],
+                        fileTypes[i],
+                        fileSizes[i],
+                        ),
+                    image = fileIcon,
+                )
+        except:
+            pass
+    
+    #--refresh browse
+    
+    #Draw browse
+    items.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)            
+    #--Draw browse
+    
+    #Refresh footer
+    footer.config(
+        text=" "
+        + str(len(fileNames))
+        + " items | "
+        + str(round(fileSizesSum / 1024, 1))
+        + " MB Total"
+    )
+    footer.pack(fill=tk.BOTH)
+    #--Refresh footer
+    
+def wrap_refresh(event): #F5 bind
+    refresh([])
+    
+def previous():
+    global lastDirectory
+    lastDirectory = os.getcwd()
+    os.chdir("../")
+    refresh([])
+    
+def next():
+    try:
+        os.chdir(lastDirectory)
+        refresh([])
+    except:
+        return
+    
+
+def onDoubleClick(event = None):    
+    global items
+    iid = items.focus()
+    
+    if iid == "": #if double click on blank, do nothing
+        return
+    for item in items.selection():
+        tempDictionary = items.item(item)
+        tempName = tempDictionary["values"][0] #pass first value of dictionary
+    try:
+        newPath = os.getcwd() + "/" + tempName
+        if os.path.isdir(newPath): #check if its directory...
+            os.chdir(newPath)
+        else: # ...or open file
+            os.startfile(newPath)
+        refresh([])
+    except:
+        newPath = newPath.replace(tempName, "")
+        os.chdir("../")
+            
+def onRightClick(m, event):
+    selectItem(event)
+    m.tk_popup(event.x_root, event.y_root)
+
+
+def search(searchEntry, event):
+    fileNames = os.listdir()
+    query = searchEntry.get() #get query from text box
+    query = query.lower()
+    queryNames = []
+    
+    for name in fileNames:
+        if name.lower().find(query) != -1: #if query exist in name
+            queryNames.append(name)
+    refresh(queryNames)
+    
+
+def create_widgets(window):
+    global folderIcon, fileIcon, items, cwdLabel, footer
+    s = ttk.Style()
+    
+    #browse frame
+    browseFrame = ttk.Frame(window)
+    scroll = ttk.Scrollbar(browseFrame, orient="vertical")
+    items = ttk.Treeview(
+        browseFrame,
+        columns = ("Name", "Date modified", "Type", "Size"),
+        yscrollcommand = scroll.set,
+        height = 15,
+        style = "Custom.Treeview",               
+    )
+    scroll.config(command=items.yview) # scroll with mouse drag
+    #--browse frame
+    
+    #footer frame
+    footerFrame = ttk.Frame(window)
+    footer = ttk.Label(footerFrame)
+    grip = ttk.Sizegrip(footerFrame, bootstyle="default")
+    #--footer frame
+    
+    folderIcon = tk.PhotoImage(file=file_path + "Folder-icon.png", width=20, height=16)
+    fileIcon = tk.PhotoImage(file=file_path + "File-icon.png", width=20, height=16)
+    
+    #Header Frame
+    refreshIcon = tk.PhotoImage(file=file_path + "reload-icon.png")
+    backArrowIcon = tk.PhotoImage(file=file_path + "Arrow-Back-icon.png")
+    frontArrowIcon = tk.PhotoImage(file=file_path + "Arrow-Front-icon.png")
+    headerFrame = ttk.Frame()
+    cwdLabel = ttk.Label(
         
-        currentPath.set(path)
+        headerFrame,
+        text = " " + os.getcwd(),
+        relief = "flat",
+        #width = 110,
+        
+    )
+    searchEntry = ttk.Entry(headerFrame, width=30, font=("TkDefaultFont", font_size))
+    searchEntry.insert(0, "Search files...")
+    searchEntry.bind("<Button-1>", partial(click, searchEntry))
+    searchEntry.bind("<FocusOut>", partial(FocusOut, searchEntry, window))
+    backButton = ttk.Button(
+        
+        headerFrame,
+        image=backArrowIcon,
+        command=previous,
+        bootstyle="light",
+        
+    )
+    forwardButton = ttk.Button(
+        
+        headerFrame,
+        image=frontArrowIcon,
+        command=next,
+        bootstyle="light",
+        
+    ) 
+    refreshButton = ttk.Button(
+        
+        headerFrame,
+        image=refreshIcon,
+        command=partial(refresh, []),
+        bootstyle="light",
+        
+    )
+    ToolTip(backButton, text="Back", bootstyle=("default", "inverse"))
+    ToolTip(forwardButton, text="Forward", bootstyle=("default", "inverse"))
+    ToolTip(refreshButton, text="Refresh", bootstyle=("default", "inverse"))
+       
+    #--Header Frame
+
+    #images
+
+    open_img = Image.open(file_path + "icon.png")
+    open_photo = ImageTk.PhotoImage(open_img)
+
+    refresh_img = Image.open(file_path + "Very-Basic-Reload-icon.png")
+    refresh_photo = ImageTk.PhotoImage(refresh_img)
+
+    rename_img = Image.open(file_path + "rename.png")
+    rename_photo = ImageTk.PhotoImage(rename_img)
+
+    drive_img = Image.open(file_path + "drive.png")
+    drive_photo = ImageTk.PhotoImage(drive_img)
+
+    info_img = Image.open(file_path + "info.png")
+    info_photo = ImageTk.PhotoImage(info_img)
+
+    pie_img = Image.open(file_path + "pie.png")
+    pie_photo = ImageTk.PhotoImage(pie_img)
+
+    cpu_img = Image.open(file_path + "cpu.png")
+    cpu_photo = ImageTk.PhotoImage(cpu_img)
+
+    memory_img = Image.open(file_path + "memory.png")
+    memory_photo = ImageTk.PhotoImage(memory_img)
+
+    network_img = Image.open(file_path + "network.png")
+    network_photo = ImageTk.PhotoImage(network_img)
+
+    process_img = Image.open(file_path + "process.png")
+    process_photo = ImageTk.PhotoImage(process_img)
+
+    file_img = Image.open(file_path + "File-icon.png")
+    file_photo = ImageTk.PhotoImage(file_img)
+
+    dir_img = Image.open(file_path + "Folder-icon.png")
+    dir_photo = ImageTk.PhotoImage(dir_img)
+
+    themes_img = Image.open(file_path + "themes.png")
+    themes_photo = ImageTk.PhotoImage(themes_img)
+
+    scale_img = Image.open(file_path + "scale.png")
+    scale_photo = ImageTk.PhotoImage(scale_img)
+
+    font_img = Image.open(file_path + "font.png")
+    font_photo = ImageTk.PhotoImage(font_img)
+
+    copy_img = Image.open(file_path + "copy.png")
+    copy_photo = ImageTk.PhotoImage(copy_img)
+
+    paste_img = Image.open(file_path + "paste.png")
+    paste_photo = ImageTk.PhotoImage(paste_img)
+
+    delete_img = Image.open(file_path + "delete.png")
+    delete_photo = ImageTk.PhotoImage(delete_img)
+
+    #Right click menu
+    
+    m = ttk.Menu(window, tearoff=False, font=("TkDefaultFont, font_size"))
+    
+    m.add_command(label="Open", image=open_photo, compound="left", command=onDoubleClick,)    
+    m.add_separator()
+    
+    m.add_command(label="New file", image=file_photo, compound="left", command=new_file_popup)
+    m.add_command(label="New directory", image=dir_photo, compound="left", command=new_dir_popup)
+    m.add_separator()
+    
+    m.add_command(label="Copy selected", image=copy_photo, compound="left", command=copy)
+    m.add_command(label="Paste selected", image=paste_photo, compound="left", command=paste)
+    m.add_command(label="Delete selected", image=delete_photo, compound="left", command=del_file_popup)
+    m.add_command(label="Rename selected", image=rename_photo, compound="left", command=rename_popup)
+    m.add_separator()
+    
+    m.add_command(label="Refresg", image=refresh_photo, compound="left", command=partial(refresh, []))
+    #--Right click menu
+    
+    s.configure(".", font=("TkDefaultFont", font_size))
+    s.configure("Treeview", rowheight=28)
+    s.configure("Treeview.Heading", font=("TkDefaultFont", str(int(font_size) + 1 ), bold))
+    
+    s.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})]) #remove borders
+    
+    items.column("#0", width=40, stretch=tk.NO)
+    items.column("Name", anchor=tk.W, width=150, minwidth=120)
+    items.column("Date modified", anchor=tk.CENTER, width=200, minwidth=120)
+    items.column("Size", anchor=tk.CENTER, width=80, minwidth=60)
+    items.column("Type", anchor=tk.CENTER, width=120, minwidth=60)
+    
+    items.heading("Name", text="Name", anchor=tk.CENTER, command=partial(sort_col, "Name", False))
+    items.heading("Date modified", text="Date modified", anchor=tk.CENTER, command=partial(sort_col, "Date modified", False))
+    items.heading("Size", text="Size", anchor=tk.CENTER, command=partial(sort_col, "Size", False))
+    items.heading("Type", text="Type", anchor=tk.CENTER, command=partial(sort_col, "Type", False))
+    
+    items.bind("<Double-1>", onDoubleClick) #double click
+    items.bind("<ButtonRelease-1>", selectItem)
+    items.bind("<Button-3>", partial(onRightClick, m)) #RMB click
+    items.bind("<Up>", up_key) 
+    items.bind("<Down>", down_key) 
+    #--Browse frame
+
+    #Menu bar
+    
+    bar = ttk.Menu(window, font=("TkDefaultFont", font_size))
+    window.config(menu=bar)
+    
+    file_menu = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    file_menu.add_command(label="Open", image=open_photo, compound="left", command=onDoubleClick)
+    file_menu.add_command(label="New file", image=file_photo, compound="left", command=new_file_popup)
+    file_menu.add_command(label="New directory", image=dir_photo, compound="left", command=new_dir_popup)
+    file_menu.add_separator()
+    
+    file_menu.add_command(label="Copy Selected", image=copy_photo, compound="left", command=copy)
+    file_menu.add_command(label="Paste Selected", image=paste_photo, compound="left", command=paste)
+    file_menu.add_command(label="Delete Selected", image=delete_photo, compound="left", command=delete)
+    file_menu.add_command(label="Rename Selected", image=rename_photo, compound="left", command=rename)
+    file_menu.add_separator()
+    
+    file_menu.add_command(label="Exit", command=window.destroy)
+    
+    drivers_menu = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    for drive in available_drivers:
+        drivers_menu.add_command(label=drive, image=drive_photo, compound="left", command=partial(cd_drive, drive, []))
+    
+    system_menu = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    system_menu.add_command(label="Drivers", image=pie_photo, compound="Left", command=partial(drive_stats, window))
+    system_menu.add_command(label="CPU", image=cpu_photo, compound="Left", command=cpu_stats)
+    system_menu.add_command(label="Memory", image=memory_photo, compound="Left", command=memory_stats)
+    system_menu.add_command(label="Network", image=network_photo, compound="Left", command=network_stats)
+    system_menu.add_command(label="Processes", image=process_photo, compound="Left", command=partial(processes_win,window))
+    
+    sub_themes = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    sub_themes.add_command(label="Darkly", command=partial(write_theme, Darkly))
+    sub_themes.add_command(label="Superhero Dark", command=partial(write_theme, Superhero))
+    sub_themes.add_command(label="Cyborg Dark", command=partial(write_theme, Cyborg))
+    sub_themes.add_command(label="Vapor Dark", command=partial(write_theme, Vapor))
+    sub_themes.add_separator()
+    sub_themes.add_command(label="Litera Light", command=partial(write_theme, Litera))
+    sub_themes.add_command(label="Minty Light", command=partial(write_theme, Minty))
+    sub_themes.add_command(label="Morph Light", command=partial(write_theme, Morph))
+    sub_themes.add_command(label="Yeti Light", command=partial(write_theme, Yeti))
+
+    sub_font_size = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    sub_font_size.add_command(label="14", command=partial(change_font_popup, 14))
+    sub_font_size.add_command(label="12", command=partial(change_font_popup, 12))
+    sub_font_size.add_command(label="11", command=partial(change_font_popup, 11))
+    sub_font_size.add_command(
+        label="10 - default", command=partial(change_font_popup, 10)
+    )
+    sub_font_size.add_command(label="9", command=partial(change_font_popup, 9))
+    sub_font_size.add_command(label="8", command=partial(change_font_popup, 8))
+    sub_font_size.add_command(label="7", command=partial(change_font_popup, 7))
+
+    sub_scale = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    sub_scale.add_command(label="150%", command=partial(change_scale, 1.5, s))
+    sub_scale.add_command(label="125%", command=partial(change_scale, 1.25, s))
+    sub_scale.add_command(label="100%", command=partial(change_scale, 1.0, s))
+    sub_scale.add_command(label="75%", command=partial(change_scale, 0.75, s))
+    sub_scale.add_command(label="50%", command=partial(change_scale, 0.5, s))
+
+    preferences_menu = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    preferences_menu.add_cascade(
+        label="Themes", image=themes_photo, compound="left", menu=sub_themes
+    )
+    preferences_menu.add_cascade(
+        label="Scale", image=scale_photo, compound="left", menu=sub_scale
+    )
+    preferences_menu.add_cascade(
+        label="Font size", image=font_photo, compound="left", menu=sub_font_size
+    )
+
+    help_menu = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    help_menu.add_command(
+        label="Keybinds", image=info_photo, compound="left", command=keybinds
+    )
+
+    about_menu = ttk.Menu(bar, tearoff=False, font=("TkDefaultFont", font_size))
+    about_menu.add_command(
+        label="About the app", command=about_popup, image=info_photo, compound="left"
+    )
+
+    bar.add_cascade(label="File", menu=file_menu, underline=0)
+    bar.add_cascade(label="Drives", menu=drivers_menu, underline=0)
+    bar.add_cascade(label="System", menu=system_menu, underline=0)
+    bar.add_cascade(label="Preferences", menu=preferences_menu, underline=0)
+    bar.add_cascade(label="Help", menu=help_menu, underline=0)
+    bar.add_cascade(label="About", menu=about_menu, underline=0)
+    # --Menu bar
+    
+    #packs
+    
+    scroll.pack(side=tk.RIGHT, fill=tk.BOTH)
+    backButton.pack(side=tk.LEFT, padx=5, pady=10, fill=tk.BOTH)
+    forwardButton.pack(side=tk.LEFT, padx=5, pady=10, fill=tk.BOTH)
+    cwdLabel.pack(side=tk.LEFT, padx=5, pady=10, fill=tk.BOTH, expand=True)
+    refreshButton.pack(side=tk.LEFT, padx=1, pady=10, fill=tk.BOTH)
+    searchEntry.pack(side=tk.LEFT, padx=5, pady=10, fill=tk.BOTH)
+    grip.pack(side=tk.RIGHT, fill=tk.BOTH, padx=2, pady=2)
+    
+    headerFrame.pack(fill=tk.X)
+    browseFrame.pack(fill=tk.BOTH, expand=True)
+    footerFrame.pack(side=tk.BOTTOM, fill=tk.BOTH)
+    
+    searchEntry.bind("<Return>", partial(search, searchEntry)) #search1 on enter
+    
+    photo_ref.append(backArrowIcon)
+    photo_ref.append(frontArrowIcon)
+    photo_ref.append(refreshIcon)
+    photo_ref.append(open_photo)
+    photo_ref.append(refresh_photo)
+    photo_ref.append(rename_photo)
+    photo_ref.append(drive_photo)
+    photo_ref.append(info_photo)
+    photo_ref.append(pie_photo)
+    photo_ref.append(cpu_photo)
+    photo_ref.append(memory_photo)
+    photo_ref.append(network_photo)
+    photo_ref.append(process_photo)
+    photo_ref.append(file_photo)
+    photo_ref.append(dir_photo)
+    photo_ref.append(themes_photo)
+    photo_ref.append(scale_photo)
+    photo_ref.append(font_photo)
+    photo_ref.append(copy_photo)
+    photo_ref.append(paste_photo)
+    photo_ref.append(delete_photo)
+
+    # wrappers for keybinds
+    window.bind("<F5>", wrap_refresh)
+    window.bind("<Delete>", wrap_del)
+    window.bind("<Control-c>", wrap_copy)
+    window.bind("<Control-v>", wrap_paste)
+    window.bind("<Control-Shift-N>", wrap_new_dir)
+
+def sort_col(col, reverse):
+    global items
+    l = [(items.set(k, col), k) for k in items.get_children("")]
+    if col == "Name" or col == "Type":
+        l.sort(reverse=reverse)
+    elif col == "Date modified":
+        l = sorted(l, key=sort_key_dates, reverse=reverse)
+    elif col == "Size":
+        l = sorted(l, key=sort_key_size, reverse=reverse)
+    
+    
+    for index, (val, k) in enumerate(l): # sort items
+        items.move(k, "", index)
+    
+    items.heading(col, command=partial(sort_col, col, not reverse)) #reverse sort
+    
+
+def sort_key_dates(item):
+    return datetime.strptime(item[0], "%d-%m-%y %I:%M")
 
 
-def goBack(event=None):
+def sort_key_size(item):
+    num_size = item[0].split(" ")[0]
+    if num_size != "":
+        return int(num_size)
+    else:
+        return -1   #negative value for sorting if it's a directory
 
-    newPath = pathlib.Path(currentPath.get()).parent #get new path and the change it
-    currentPath.set(newPath)
-    print("going up")
+
+def write_theme(theme):
+    with open(file_path + "../res/theme.txt", "w") as f:
+        f.write(theme)
+    warning_popup()
 
 
-def open_popup():
+def warning_popup():
+    Messagebox.show_info(
+        
+        message="Please restart application to apply changes.", title="Info"
+        
+    )
 
-    global top
 
-    top = Toplevel(root)
+def change_font_popup(size):
+    warning_popup()
+    change_font_size(size)
 
-    top.geometry('250x150')
+
+def change_font_size(size):
+    with open(file_path + "../res/font.txt", "w") as f:
+        f.write(str(size))
+
+
+def change_scale(multiplier, s):
+    scale = round(multiplier * 28) #28 is default
+    s.configure("Treeview", rowheight=scale)
+
+
+def drive_stats(window):
+    top = ttk.Toplevel(window)
     top.resizable(False, False)
-    top.title('child window')
-    top.columnconfigure(0,weight=1)
+    top.iconphoto(False, tk.PhotoImage(file=file_path + "info.png"))
+    top.title("Drivers")
     
-    Label(top, text='Enter File or Folder name').grid()
-    Entry(top, textvariable=newFileName).grid(column=0, pady=10, sticky='NSEW')
-    Button(top, text="Create", command=newFileOrFolder).grid(pady=10, sticky='NSEW')
+    meters = []
+    for drive in available_drivers:
+        meters.append(
+            ttk.Meter(
+                top,
+                bootstyle="default",
+                metersize=180,
+                padding=5,
+                metertype="semi",
+                subtext="GB Used",
+                textright="/ "
+                + str(
+                    round(psutil.disk_usage(drive).total / (1024 * 1024 * 1024))
+                ),  # converts bytes to GB
+                textleft=drive,
+                interactive=False,
+                amounttotal=round(
+                    psutil.disk_usage(drive).total / (1024 * 1024 * 1024)
+                ),  # converts bytes to GB
+                amountused=round(
+                    psutil.disk_usage(drive).used / (1024 * 1024 * 1024)
+                )                
+            )                    
+        )
+    top.geometry(str(len(meters) *200) +"x200")    
+    for meter in meters:
+        meter.pack(side=tk.LEFT, expand=True, fill=tk.X)
 
-def newFileOrFolder():
 
-    if len(newFileName.get().split('.')) !=1:                                           #check if file/dir
-        open(os.path.join(currentPath.get(), newFileName.get()), 'w').close()
+def cpu_stats():
+    cpu_count_log = psutil.cpu_count()
+    cpu_count = psutil.cpu_count(logical=False)
+    cpu_per = psutil.cpu_percent()
+    cpu_freq = round(psutil.cpu_freq().current / 1000, 2)
+    
+    Messagebox.ok(
+        message="Usage: "
+        + str(cpu_per)
+        + "%"
+        + "\nLogical Processors: "
+        + str(cpu_count)
+        + "\nCores: "
+        + str(cpu_count_log)
+        + "\nFrequency: "
+        + str(cpu_freq)
+        + " GHz",
+        title="CPU"        
+    )
+
+
+def memory_stats():
+    
+    memory_per = psutil.virtual_memory().percent
+    memory_total = round(psutil.virtual_memory().total / (1024 *1024 *1024), 2)
+    memory_used = round(psutil.virtual_memory().used / (1024 *1024 *1024), 2)
+    memory_available = round(psutil.virtual_memory().available / (1024 *1024 *1024), 2)
+    
+    Messagebox.ok(
+        message="Usage: "
+        + str(memory_per)
+        + "%"
+        + "\nTotal: "
+        + str(memory_total)
+        + " GB"
+        + "\nUsed: "
+        + str(memory_used)
+        + " GB"
+        + "\nAvailable: "
+        + str(memory_avail)
+        + " GB",
+        title="Memory",
+    )
+    
+
+def network_stats():
+    net = psutil.net_io_counters(pernic=True)
+    mes = ""
+    for key, value in net.items():
+        mes += (
+            str(key)
+            + ":\n"
+            + "Sent: "
+            + str(round(value.bytes_sent / (1024 *1024 *1024), 2))
+            + "GB\n"
+            + "Received: "
+            + str(round(value.bytes_recv / (1024 *1024 *1024), 2))
+            + " GB\n\n"           
+        )
+    Messagebox.ok(message=mes, title="Network")
+    
+
+def processes_win(window):
+    top = ttk.Toplevel(window)
+    top.geometry("1024x600")
+    top.resizable(True, True)
+    top.iconphoto(False, tk.PhotoImage(file=file_path + "process.png"))
+    top.title("Processes")
+    scroll = ttk.Scrollbar(top, orient="vertical")
+    
+    processes_list = []
+    for i in psutil.pids():
+        p = psutil.Process(i)
+        processes_list.append(p.name(), p.pid, p.status(), str(round(p.memory_info().rss / 1024 )) + "KB")
+    
+    processes = ttk.Treeview(
+        top,
+        columns=("Name", "PID", "Status", "Memory"),
+        yscrollcommand=scroll.set,
+        style="Custom.Treeview",
+        )
+    for p in processes_list:
+        processes.insert(parent="", index=0, values=0)
+        processes.heading("Name", text="Name", anchor="w")
+        processes.heading("PID", text="PID", anchor="w")
+        processes.heading("Status", text="Status", anchor="w")
+        processes.heading("Memory", text="Memory", anchor="w")
+        scroll.config(command=process.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.BOTH)
+        processes.pack(side=tk.LEFT, fill=tk.BOTH, expand=True) 
+    
+
+def cd_drive(drive, queryNames):
+    global fileNames, currentDrive, cwdLabel
+    cwdLabel.config(text=" " + drive)
+    currentDrive = drive
+    fileNames = os.listdir(currentDrive)
+    os.chdir(currentDrive + "/")
+    refresh(queryNames)
+
+
+def up_key(event):
+    global selectedItem, items
+    iid = items.focus()
+    iid = items.prev(iid)
+    
+    if iid:
+        items.selection_set(iid)
+        selectedItem = items.item(iid)["values"][0]
+        print(selectedItem)
     
     else:
-        os.mkdir(os.path.join(currentPath.get(), newFileName.get))
+        pass
 
+
+def down_key(event):
+    global selectedItem, items
+    iid = items.focus()
+    iid = items.next(iid)
+    
+    if iid:
+        items.selection_set(iid)
+        selectedItem = items.item(iid)["values"][0]
+        print(selectedItem)
+    
+    else:
+        pass
+
+
+def click(searchEntry, event):
+    
+    if searchEntry.get() == "Searching files...":
+        searchEntry.delete(0, "end")
+        
+
+def FocusOut(searchEntry, window, event):
+    searchEntry.delete(0, "end")
+    searchEntry.insert(0, "Search files...")
+    window.focus()
+
+
+def rename_popup():
+    global items
+    
+    if items.focus() != "":
+        try:
+            name = Querybox.get_string(prompt="Name: ", title="Rename")
+            old = os.getcwd() + "/" + selectedItem
+            os.rename(old, name)
+            refresh([])
+        except:
+            pass
+   
+    else:
+        Messagebox.show_info(
+            message="There is no selected item", title="Info"
+        )        
+
+
+def selectItem(event):
+    global selectedItem, items
+    iid = items.identify_row(event.y)  #selected itemID
+ 
+    if iid:
+        items.selection_set(iid)
+        selectedItem = items.item(iid)["values"][0]
+        print(selectedItem)
+        items.focus(iid) 
+    else:
+        pass
+    
+
+def keybinds():
+    Messagebox.ok(
+        message="Copy - <Control + C>\nPaste - <Control + V>\nDelete - <Del>\n"
+        + "New Directory - <Control + Shift + N>\nRefresh - <F5>\n"
+        + "Select up - <Arrow key up>\nSelect down - <Arrow key down>",
+        title="Info"        
+    )
+
+
+def about_popup(): #popup window
+    Messagebox.ok(
+        message="My File Explorer\nMade by: Pacek",
+        title="About"        
+    )
+    
+    
+def new_file_popup():
+    name = Querybox.get_string(prompt="Name: ", title="New file")
+ 
+    if name != "":
+        try:
+            f = open(os.getcwd() + "/" + name, "x")
+            f.close()
+            refresh([])
+        except:
+            pass
+
+
+def new_dir_popup():
+    name = Querybox.get_string(prompt="Name: ", title="New directory")
+ 
+    if name != "":
+        try:
+            os.mkdir(os.getcwd() + "/" + name)
+            refresh([])
+        except:
+            pass
+
+def wrap_new_dir():
+    new_dir_popup()
+
+
+def copy():
+    global src, items
+ 
+    if items.focus() != "": # if there is a focused item
+        src = os.getcwd() + "/" + selectedItem  
+
+
+def wrap_copy(event): #wrapper for ctrl+c
+    copy()
+
+
+def wrap_paste(event): #wrapper for ctrl+v
+    paste()
+    
+    
+def paste():
+    global src
+    dest = os.getcwd() + "/" #destination
+ 
+    if not os.path.isdir(src) and src != "":
+        try:
+            t1 = threading.Thread(
+                
+                target=shutil.copy2, args=(src, dest)
+                
+            )
+            t2 = threading.Thread(target=paste_popup, args=([t1]))
+            t1.start()
+            t2.start()
+        except:
+            pass
+ 
+    elif os.path.isdir(src) and src != "":
+        try:
+            new_dest_dir = os.path.join(dest, os.path.basename(src))
+            os.makedirs(new_dest_dir)
+            t1 = threading.Thread(
+                
+                target=shutil.copytree,
+                args=(src, new_dest_dir, False, None, shutil.copy2, False, True)
+                
+            )
+            t2 = threading.Thread(target=paste_popup, args=([t1]))
+            t1.start()
+            t2.start()
+        except:
+            pass
+    
+def paste_popup(t1):
+    top = ttk.Toplevel(title="Progress")
+    top.geometry("250x50")
+    top.resizable(False, False)
+    
+    gauge = ttk.Floodgauge(
+        top, bootstyle="success", mode="indeterminate", text="Copying files..."
+    )
+    gauge.pack(fill=tk.BOTH, expand=tk.YES)
+    gauge.start()
+    t1.join()
+    refresh([])
     top.destroy()
-    pathChange()
+    
+    
+def del_file_popup():
+    global items
+ 
+    if items.focus() != "": #if there is focused item
+        answer = Messagebox.yesno(
+            
+            message="Are you sure?\nThis file/directory will be deleted permanently.",
+            alert=True,
+            
+        )
+        if answer == "Yes":
+            del_file()
+            refresh([])
+        else:
+            return
+ 
+    else:
+        Messagebox.show_info(
+            
+            message="There is no selected item", title="Info"
+                    
+        )    
+    
+    
+def wrap_del(event): #wrappr for deleted kaybind
+    del_file_popup()
+    
+    
+def del_file():
+    if os.path.isfile(os.getcwd() + "/" + selectedItem):
+        os.remove(os.getcwd() + "/" + selectedItem)
+    elif os.path.isdir(os.getcwd() +  "/" + selectedItem):
+        shutil.rmtree(os.getcwd() + "/" + selectedItem)
+    
+    
+def read_theme():
+    global theme, file_path
+    print(file_path)
+    with open(file_path + "\res\theme.txt") as f: #closes file automatically
+        theme = f.readline()
+    if theme == "": #if theme.txt is empty, set default
+        theme = Darkly
 
-top = ''
 
-#string variables
-
-newFileName = StringVar(root, "File.dot", 'new_name')
-currentPath = StringVar(
-
-    root,
-    name='currentPath',
-    value=pathlib.Path.cwd()
-
-)
-
-currentPath.trace('w', pathChange)              #bind changes in this var for pathChange func.
-
-Button(root, text='Folder Up', command=goBack).grid(sticky='NSEW', column=0, row=0)
-
-#root.bind("<Alt+Up>", goBack)                   #key-shortcut for goBack
-
-Entry(root, textvariable=currentPath).grid(sticky='NSEW', column=1, row=0, ipadx=10, ipady=10)
-
-list = Listbox(root)
-list.grid(sticky="NSEW", column=1, row=1, ipadx=10, ipady=10)
-
-list.bind('<Double-1>', changePathByClicking)
-list.bind('<Return>', changePathByClicking)
+def read_font():
+    global font_size
+    with open(file_path + "\res\font.txt") as f: #closes file automatically
+        font_size = f.readline()
+    if font_size == "": #if font.txt is empty, set default
+        font_size = 10
 
 
-#Menu
+def main():
+    global file_path
+    file_path = os.path.join(os.path.dirname(__file__))
+    checkPlatform()
+    read_theme()
+    read_font()
+    root = createWindow()
 
-
-menubar= Menu(root)
-menubar.add_command(label="Add File or Folder", command=open_popup)
-menubar.add_command(label='Quit', command=root.quit)
-root.config(menu=menubar)
-
-pathChange('')
-
-root.mainloop()
+    create_widgets(root)
+    refresh([])
+    root.mainloop()
+    
+    
+if __name__ == "__main__":
+    main()
